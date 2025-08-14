@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>for u manon</title>
+  <style>
+    :root{
+      --bg:#0f172a;
+      --fg:#e2e8f0;
+      --accent:#22c55e;
+      --accent-2:#16a34a;
+      --danger:#ef4444;
+      --panel:#111827cc;
+    }
+    html,body{
+      margin:0; height:100%; overflow:hidden; background:var(--bg); color:var(--fg);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Noto Sans, Ubuntu, Cantarell, Helvetica, Arial;
+    }
+    .wrap{position:fixed; inset:0; display:grid; place-items:center}
+    canvas{display:block; width:100vw; height:100vh; touch-action:none;}
+    .hud{position:fixed; left:0; right:0; top:0; display:flex; justify-content:space-between; padding:12px 16px; pointer-events:none; font-weight:700; letter-spacing:.5px}
+    .hud .score{font-size:28px; text-shadow:0 2px 8px #0008}
+    .hud .best{opacity:.8}
+    .panel{position:fixed; inset:0; display:flex; align-items:center; justify-content:center; background:linear-gradient(180deg, #00000055, #000000aa);}
+    .card{background:var(--panel); border:1px solid #ffffff12; padding:20px; border-radius:20px; box-shadow:0 10px 30px #0008; width:min(420px, 92vw); text-align:center}
+    .title{font-size:40px; margin:0 0 8px}
+    .subtitle{margin:0 0 18px; opacity:.9}
+    .btn{appearance:none; border:0; border-radius:14px; padding:14px 18px; font-size:18px; font-weight:800; cursor:pointer; color:#04210e; background:linear-gradient(180deg, var(--accent), var(--accent-2)); box-shadow:0 6px 0 #0a3b1d, 0 12px 24px #0008; transition:transform .05s ease, filter .2s ease}
+    .btn:active{transform:translateY(2px)}
+    .hint{margin-top:12px; font-size:14px; opacity:.85}
+    .danger{color:#330606; background:linear-gradient(180deg, #f87171, #ef4444); box-shadow:0 6px 0 #7f1d1d, 0 12px 24px #0008;}
+    @media (max-width:480px){
+      .title{font-size:32px}
+      .hud .score{font-size:24px}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap"><canvas id="game"></canvas></div>
+  <div class="hud">
+    <div class="best">Best: <span id="best">0</span></div>
+    <div class="score">Score: <span id="score">0</span></div>
+  </div>
+  <div class="panel" id="startPanel" aria-hidden="false">
+    <div class="card">
+      <h1 class="title">for u manon</h1>
+      <p class="subtitle">🎮 اضغط <b>Start</b> و‏‏‏ادِّيها طيران!<br/>الموبايل: اضغط الشاشة — الكمبيوتر: Space / ↑</p>
+      <button class="btn" id="startBtn">Start</button>
+      <div class="hint">المسافة بين الأنابيب متوسعة عشان اللعب يبقى أهدى 💚</div>
+    </div>
+  </div>
+  <div class="panel" id="overPanel" aria-hidden="true" style="display:none">
+    <div class="card">
+      <h2 class="title" style="font-size:34px;">Game Over</h2>
+      <p class="subtitle">Score: <b id="finalScore">0</b></p>
+      <button class="btn danger" id="retryBtn">Try Again</button>
+      <div class="hint">اضغط الشاشة أو Space علشان تطير</div>
+    </div>
+  </div>
+
+  <!-- الموسيقى -->
+  <audio id="bgMusic" loop>
+    <source src="Cafuné - Tek It (I Watch The Moon) [Official Video].mp3" type="audio/mpeg">
+  </audio>
+
+  <script>
+  (function(){
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+
+    const bgMusic = document.getElementById('bgMusic');
+
+    function resize(){
+      const ratio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      const w = Math.floor(window.innerWidth);
+      const h = Math.floor(window.innerHeight);
+      canvas.style.width = w + 'px';
+      canvas.style.height = h + 'px';
+      canvas.width = Math.floor(w * ratio);
+      canvas.height = Math.floor(h * ratio);
+      ctx.setTransform(ratio,0,0,ratio,0,0);
+    }
+    window.addEventListener('resize', resize, {passive:true});
+    resize();
+
+    const G = 1400, LIFT = -420;
+    let PIPE_GAP = 220, PIPE_SPEED = 160;
+    const PIPE_SPACING = 360, BIRD_SIZE = 50;
+
+    let started = false, gameOver = false, score = 0;
+    let best = +localStorage.getItem('bestScore_v1') || 0;
+    document.getElementById('best').textContent = best;
+
+    const bird = { x: 170, y: 0, vy: 0 };
+    let pipes = [];
+
+    const birdImg = new Image();
+    birdImg.src = "523179619_742683858352768_3376068235624150150_n.jpg";
+    let birdLoaded = false;
+    birdImg.onload = () => { birdLoaded = true; };
+
+    function reset(){
+      score = 0; updateScore();
+      started = true; gameOver = false;
+      bird.x = Math.max(80, canvas.width/(window.devicePixelRatio||1)*0.25);
+      bird.y = canvas.height/(window.devicePixelRatio||1)*0.4;
+      bird.vy = 0;
+      pipes = [];
+      pipeTimer = 0; lastTime = undefined;
+
+      // تشغيل الموسيقى
+      bgMusic.currentTime = 0;
+      bgMusic.play().catch(e => console.log('User interaction needed to start music'));
+    }
+
+    function updateScore(){
+      document.getElementById('score').textContent = score;
+    }
+
+    function flap(){
+      if(!started){ hideStart(); reset(); }
+      if(gameOver){ return; }
+      bird.vy = LIFT;
+    }
+
+    window.addEventListener('keydown', (e)=>{
+      if(e.code === 'Space' || e.code === 'ArrowUp'){ e.preventDefault(); flap(); }
+    });
+    window.addEventListener('touchstart', (e)=>{ e.preventDefault(); flap(); }, {passive:false});
+
+    const startPanel = document.getElementById('startPanel');
+    const overPanel = document.getElementById('overPanel');
+    const startBtn = document.getElementById('startBtn');
+    const retryBtn = document.getElementById('retryBtn');
+    const finalScore = document.getElementById('finalScore');
+
+    startBtn.addEventListener('click', ()=>{ hideStart(); reset(); });
+    retryBtn.addEventListener('click', ()=>{ hideOver(); reset(); });
+
+    function hideStart(){ startPanel.style.display='none'; startPanel.setAttribute('aria-hidden','true'); }
+    function showOver(){ overPanel.style.display='flex'; overPanel.setAttribute('aria-hidden','false'); }
+    function hideOver(){ overPanel.style.display='none'; overPanel.setAttribute('aria-hidden','true'); }
+
+    function spawnPipePair(){
+      const h = canvas.height / (window.devicePixelRatio||1);
+      const minTop = 60;
+      const maxTop = h - (minTop + PIPE_GAP);
+      const top = Math.max(minTop, Math.min(maxTop, Math.random() * maxTop));
+      pipes.push({ x: innerWidth + 60, top, gap: PIPE_GAP, passed:false });
+    }
+
+    function rect(x,y,w,h, color){
+      ctx.fillStyle = color; ctx.fillRect(x,y,w,h);
+    }
+
+    let lastTime; let pipeTimer = 0;
+    function loop(ts){
+      if(!started){ drawSplash(); requestAnimationFrame(loop); return; }
+      if(lastTime === undefined) lastTime = ts;
+      let dt = (ts - lastTime) / 1000; lastTime = ts;
+      if(dt > 0.033) dt = 0.033;
+
+      update(dt);
+      draw();
+
+      requestAnimationFrame(loop);
+    }
+
+    function update(dt){
+      if(gameOver) return;
+      bird.vy += G * dt;
+      bird.y += bird.vy * dt;
+
+      pipeTimer += dt;
+      const need = PIPE_SPACING / PIPE_SPEED;
+      if(pipeTimer >= need){ pipeTimer = 0; spawnPipePair(); }
+
+      for(const p of pipes){ p.x -= PIPE_SPEED * dt; }
+      while(pipes.length && pipes[0].x < -80) pipes.shift();
+
+      const bx = bird.x, by = bird.y, bs = BIRD_SIZE;
+      const ground = canvas.height / (window.devicePixelRatio||1);
+
+      for(const p of pipes){
+        const pw = 70;
+        if(!p.passed && (p.x + pw) < bx){
+          p.passed = true; score++; updateScore();
+          if(score % 5 === 0){
+            PIPE_SPEED = Math.min(260, PIPE_SPEED + 10);
+            PIPE_GAP = Math.max(170, PIPE_GAP - 5);
+          }
+        }
+        const inX = (bx + bs > p.x) && (bx < p.x + pw);
+        if(inX){
+          const topH = p.top;
+          const bottomY = p.top + p.gap;
+          if(by < topH || (by + bs) > bottomY){ endGame(); return; }
+        }
+      }
+      if(by < 0 || (by + bs) > ground){ endGame(); return; }
+    }
+
+    function endGame(){
+      gameOver = true; started = false;
+      best = Math.max(best, score); localStorage.setItem('bestScore_v1', best);
+      document.getElementById('best').textContent = best;
+      finalScore.textContent = score;
+      showOver();
+
+      // إيقاف الموسيقى عند الخسارة
+      bgMusic.pause();
+    }
+
+    function drawSplash(){
+      drawBackground();
+      drawBirdGhost();
+    }
+
+    function draw(){
+      drawBackground();
+      const h = canvas.height / (window.devicePixelRatio||1);
+      const pw = 70;
+      for(const p of pipes){
+        rect(p.x, 0, pw, p.top, '#14532d');
+        rect(p.x-3, p.top-14, pw+6, 14, '#166534');
+        const bottomY = p.top + p.gap;
+        rect(p.x, bottomY, pw, h - bottomY, '#14532d');
+        rect(p.x-3, bottomY, pw+6, 14, '#166534');
+      }
+      drawBird();
+    }
+
+    function drawBackground(){
+      const w = canvas.width / (window.devicePixelRatio||1);
+      const h = canvas.height / (window.devicePixelRatio||1);
+      const g = ctx.createLinearGradient(0,0,0,h);
+      g.addColorStop(0,'#0ea5e9');
+      g.addColorStop(1,'#1e293b');
+      ctx.fillStyle = g; ctx.fillRect(0,0,w,h);
+      rect(0, h-40, w, 40, '#334155');
+    }
+
+    function drawBird(){
+      if(birdLoaded){
+        ctx.drawImage(birdImg, bird.x, bird.y, BIRD_SIZE, BIRD_SIZE);
+      } else {
+        rect(bird.x, bird.y, BIRD_SIZE, BIRD_SIZE, '#fbbf24');
+      }
+    }
+
+    function drawBirdGhost(){
+      const s = BIRD_SIZE;
+      const y = canvas.height/(window.devicePixelRatio||1)*0.45;
+      const x = Math.max(80, canvas.width/(window.devicePixelRatio||1)*0.25);
+      ctx.globalAlpha = 0.8;
+      rect(x, y, s, s, '#fde68a');
+      ctx.globalAlpha = 1;
+    }
+
+    requestAnimationFrame(loop);
+  })();
+  </script>
+</body>
+</html>
